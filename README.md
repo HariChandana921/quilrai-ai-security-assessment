@@ -162,3 +162,248 @@ The gateway validates incoming JSON-RPC requests and checks authorization before
 Unauthorized administrative calls are blocked at the gateway, preventing their execution by the downstream server.
 
 For demonstration purposes, the implementation uses predefined authentication tokens. Production deployments should use secure token validation and appropriate secret management.
+
+
+# Task 3: Real-Time Streaming PII Guardrail
+
+## Overview
+
+This project implements a real-time streaming PII (Personally Identifiable Information) guardrail using Python, FastAPI, and HTTPX.
+
+The gateway acts as a security layer between a client and a downstream Large Language Model (LLM). It receives streaming responses from the LLM, detects sensitive information, and redacts it before forwarding the content to the client.
+
+The implementation focuses on preventing sensitive information from leaking even when PII is split across multiple streaming chunks.
+
+## Objectives
+
+- Implement an asynchronous FastAPI gateway for LLM responses.
+- Support real-time Server-Sent Events (SSE).
+- Detect and redact sensitive information.
+- Prevent PII leakage across chunk boundaries.
+- Preserve non-sensitive response content.
+- Handle upstream errors and connection failures.
+- Validate functionality using automated tests.
+
+## Technology Stack
+
+| Technology | Purpose |
+|---|---|
+| Python | Application development |
+| FastAPI | API gateway |
+| HTTPX | Asynchronous communication with the downstream LLM |
+| Uvicorn | ASGI server |
+| Regular Expressions | PII detection and redaction |
+| SSE | Real-time response streaming |
+| Pytest | Automated testing |
+
+## Project Structure
+
+```text
+task3_streaming_guardrail/
+├── gateway.py
+├── mock_llm.py
+├── test_gateway.py
+└── README.md
+```
+
+**File descriptions:**
+
+- `gateway.py`: Implements the streaming gateway, PII detection, redaction, and SSE responses.
+- `mock_llm.py`: Simulates an LLM that produces streaming responses containing test PII.
+- `test_gateway.py`: Contains automated tests for endpoint behavior, PII redaction, and error handling.
+- `README.md`: Documents the implementation, setup, and testing procedure.
+
+## Architecture
+
+```text
+             Client
+                |
+                | POST /generate
+                v
+       FastAPI PII Gateway
+                |
+                | HTTPX Async Request
+                v
+          Mock LLM Server
+                |
+                | Streaming SSE Events
+                v
+       Streaming PII Guardrail
+                |
+                | Incremental buffering
+                | PII detection
+                | Sensitive data redaction
+                v
+          Safe SSE Events
+                |
+                v
+             Client
+```
+
+## PII Detection
+
+The gateway detects and redacts the following categories:
+
+| PII Type | Example | Redacted Output |
+|---|---|---|
+| Email address | alice@example.com | [REDACTED] |
+| Social Security Number | 123-45-6789 | [REDACTED] |
+| Credit card number | 4111 1111 1111 1111 | [REDACTED] |
+
+The gateway replaces detected sensitive values with `[REDACTED]`.
+
+## Real-Time Streaming Implementation
+
+Unlike an approach that buffers the entire LLM response, this implementation processes incoming content incrementally.
+
+The gateway maintains a pending buffer for text that may contain incomplete sensitive information.
+
+The processing workflow is:
+
+1. Receive an SSE event from the downstream LLM.
+2. Extract the generated text from the event.
+3. Append the content to the pending buffer.
+4. Identify portions of text that can be safely released.
+5. Apply PII redaction before forwarding content.
+6. Retain potentially incomplete sensitive values until they can be processed safely.
+7. Send the final SSE completion event.
+
+A maximum pending-buffer limit is used to avoid unbounded buffering. If the pending content exceeds the configured threshold, the implementation replaces it with a redaction marker.
+
+This approach supports incremental delivery while protecting the tested PII patterns across chunk boundaries.
+
+## Installation and Setup
+
+### 1. Navigate to the project root
+
+```bash
+cd quilrai-ai-security-assessment
+```
+
+### 2. Activate the virtual environment
+
+On macOS or Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+### 3. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+## Running the Application
+
+The application uses two local servers.
+
+### Terminal 1: Start the Mock LLM
+
+```bash
+python -m uvicorn task3_streaming_guardrail.mock_llm:app --host 127.0.0.1 --port 8001
+```
+
+### Terminal 2: Start the PII Gateway
+
+```bash
+python -m uvicorn task3_streaming_guardrail.gateway:app --host 127.0.0.1 --port 8000
+```
+
+### Terminal 3: Test the Streaming Endpoint
+
+```bash
+curl -N --no-buffer -X POST http://127.0.0.1:8000/generate
+```
+
+The endpoint returns SSE events with detected PII replaced by `[REDACTED]`.
+
+## Testing
+
+Run the Task 3 tests from the repository root:
+
+```bash
+python -m pytest task3_streaming_guardrail/test_gateway.py -v --import-mode=importlib
+```
+
+Run the complete assessment test suite:
+
+```bash
+python -m pytest -v --import-mode=importlib
+```
+
+### Test Coverage
+
+The automated tests cover:
+
+- Gateway application initialization
+- POST endpoint registration
+- Rejection of unsupported GET requests
+- Email redaction
+- SSN redaction across chunks
+- Credit card redaction
+- Preservation of safe text
+- Upstream HTTP errors
+- Downstream connection failures
+
+### Test Results
+
+During local verification, the complete assessment test suite produced:
+
+```text
+24 passed in 0.33s
+```
+
+All 24 collected tests passed in this run.
+
+## Real-Time Streaming Verification
+
+Streaming behavior was also tested using a local mock LLM with delayed output.
+
+The observed results were:
+
+| Event | Approximate Arrival Time |
+|---|---|
+| First safe content | 0.02 seconds |
+| Additional redacted content | 10.03 seconds |
+| SSE completion marker | 12.03 seconds |
+
+These results demonstrate that the gateway can deliver initial safe content before the downstream LLM completes its response.
+
+The test also showed that email addresses, SSNs, and credit card numbers in the sample response were redacted.
+
+## Error Handling
+
+The gateway handles downstream communication failures and upstream HTTP errors.
+
+It is designed to avoid exposing sensitive internal error details to the client.
+
+Because a streaming response may already have started when an error occurs, errors encountered during streaming are communicated within the SSE response rather than by changing the HTTP status code after headers have been sent.
+
+## Security Considerations
+
+The implementation includes the following security measures:
+
+- Redaction before client delivery
+- Protection against tested cross-chunk PII patterns
+- Incremental buffering of potentially sensitive content
+- Maximum pending-buffer threshold
+- Asynchronous resource cleanup
+- Disabled response caching through `Cache-Control: no-cache`
+- `X-Content-Type-Options: nosniff`
+
+### Limitations
+
+PII detection is based on regular expressions and may not identify every possible sensitive-data format.
+
+The buffering strategy may introduce latency when the gateway cannot yet determine whether incoming content is safe.
+
+Additional production improvements could include more comprehensive PII detection, stricter input validation, structured logging without sensitive content, and broader adversarial testing.
+
+## Conclusion
+
+Task 3 demonstrates a real-time streaming security gateway that redacts supported PII patterns before delivering LLM-generated content to clients.
+
+The solution combines asynchronous communication, SSE streaming, incremental buffering, regular-expression-based redaction, and automated testing.
+
+Local verification demonstrated incremental delivery, successful redaction of the tested sensitive information, and passing automated tests.
