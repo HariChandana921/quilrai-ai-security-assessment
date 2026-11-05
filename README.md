@@ -532,4 +532,3 @@ reconcile reservations against actual provider usage, and define
 how failed requests affect token accounting.
 
 SQLite database files are excluded from Git.
-```
