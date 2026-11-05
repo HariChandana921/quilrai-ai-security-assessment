@@ -21,3 +21,6 @@ __pycache__/
 
 # Logs
 *.log
+
+# Task 4 SQLite database
+rate_limits.db*

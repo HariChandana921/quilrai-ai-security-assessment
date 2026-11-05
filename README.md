@@ -407,3 +407,129 @@ Task 3 demonstrates a real-time streaming security gateway that redacts supporte
 The solution combines asynchronous communication, SSE streaming, incremental buffering, regular-expression-based redaction, and automated testing.
 
 Local verification demonstrated incremental delivery, successful redaction of the tested sensitive information, and passing automated tests.
+
+
+---
+
+## Task 4: Multi-Model Router with Rate Limiting
+
+### Overview
+
+This task implements a FastAPI-based model routing gateway with
+primary and backup LLM providers, tenant-specific rate limiting,
+and automatic provider failover.
+
+### Features
+
+- Primary model routing for normal requests.
+- Automatic backup routing when the primary returns HTTP 429.
+- Backup routing when the primary exceeds its 3-second timeout.
+- SQLite-backed, per-tenant sliding-window rate limiting.
+- A limit of 50,000 reserved tokens per 60-second window.
+- Atomic token reservations to protect against concurrent requests.
+- Estimated input-token and maximum output-token accounting.
+- Standardized error responses without exposing internal provider details.
+
+### Architecture
+
+Client
+  |
+  v
+FastAPI Model Router (Port 8000)
+  |
+  +-- API Key / Tenant Identification
+  |
+  +-- SQLite Rate Limiter
+  |      |
+  |      +-- 60-second sliding window
+  |      +-- 50,000-token reservation limit
+  |
+  +-- Primary LLM (Port 8001)
+  |      |
+  |      +-- Success -> Return response
+  |      +-- HTTP 429 / Timeout -> Backup
+  |
+  +-- Backup LLM (Port 8002)
+         |
+         +-- Success -> Return response
+         +-- Failure -> Sanitized gateway error
+
+### Installation
+
+From the repository root:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### Running the Services
+
+Open three separate terminals.
+
+Primary provider:
+
+```bash
+python -m uvicorn task4_model_router.mock_models:app --port 8001
+```
+
+Backup provider:
+
+```bash
+MOCK_PROVIDER=backup python -m uvicorn task4_model_router.mock_models:app --port 8002
+```
+
+Model router:
+
+```bash
+python -m uvicorn task4_model_router.router:app --port 8000
+```
+
+### Example Request
+
+```bash
+curl -X POST http://127.0.0.1:8000/generate \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: tenant-demo" \
+  -d '{"prompt":"Hello AI","max_tokens":100}'
+```
+
+### Testing
+
+Run Task 4 tests:
+
+```bash
+python -m pytest task4_model_router/test_router.py -v --import-mode=importlib
+```
+
+Run all assessment tests:
+
+```bash
+python -m pytest -v --import-mode=importlib
+```
+
+### Test Coverage
+
+- Token limit enforcement
+- Tenant isolation
+- Sliding-window expiration
+- Concurrent token reservations
+- Primary provider success
+- HTTP 429 fallback
+- Primary timeout fallback
+- Sanitized upstream errors
+- Input-token accounting
+
+### Implementation Notes
+
+Input tokens are estimated using approximately four characters
+per token. This is an approximation rather than an exact tokenizer.
+
+The router reserves estimated input tokens plus the maximum
+requested output tokens before sending a request.
+
+A production implementation should use model-specific tokenizers,
+reconcile reservations against actual provider usage, and define
+how failed requests affect token accounting.
+
+SQLite database files are excluded from Git.
+```
